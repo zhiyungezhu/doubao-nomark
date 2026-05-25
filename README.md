@@ -3,9 +3,8 @@
   <h1>无印豆包</h1>
 </div>
 <p align="center">
-  <a href="https://github.com/ihmily/doubao-nomark/stargazers"><img src="https://img.shields.io/github/stars/ihmily/doubao-nomark?v=0" alt="GitHub stars"/></a>
+  <a href="https://github.com/zhiyungezhu/doubao-nomark/stargazers"><img src="https://img.shields.io/github/stars/zhiyungezhu/doubao-nomark?v=0" alt="GitHub stars"/></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/Python-3.10+-blue.svg" alt="Python"/></a>
-  <a href="https://hub.docker.com/r/ihmily/doubao-nomark/tags"><img src="https://img.shields.io/docker/pulls/ihmily/doubao-nomark?v=0" alt="Docker Pulls"/></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"/></a>
 </p>
 
@@ -24,7 +23,7 @@
 
 ```bash
 # 1. 克隆项目
-git clone https://github.com/ihmily/doubao-nomark.git
+git clone https://github.com/zhiyungezhu/doubao-nomark.git
 cd doubao-nomark
 
 # 2.使用 uv 创建虚拟环境并安装依赖
@@ -54,21 +53,14 @@ uvicorn app:app --host 0.0.0.0 --port 8000
 
 **方式 A：使用远程镜像**
 
+> 发布到 Docker Hub 后可用此方式，参见下方「发布到 Docker Hub」说明。
+
 ```bash
-# 拉取镜像
-docker pull ihmily/doubao-nomark
+# 拉取镜像（将 你的用户名 替换为你的 Docker Hub 用户名）
+docker pull 你的用户名/doubao-nomark
 
 # 运行容器
-docker run -d -p 8000:8000 --name doubao-app ihmily/doubao-nomark
-
-# 查看日志
-docker logs -f doubao-app
-
-# 停止容器
-docker stop doubao-app
-
-# 删除容器
-docker rm doubao-app
+docker run -d -p 8000:8000 --name doubao-app 你的用户名/doubao-nomark
 ```
 
 **方式 B：本地构建镜像**
@@ -89,7 +81,7 @@ docker run -d -p 8000:8000 --name doubao-app doubao-nomark
 
 ```bash
 # 克隆项目
-git clone https://github.com/ihmily/doubao-nomark.git
+git clone https://github.com/zhiyungezhu/doubao-nomark.git
 cd doubao-nomark
 
 # 以可编辑模式安装
@@ -235,9 +227,28 @@ video_data = await doubao_video_parse(
 
 ![script-example](docs/images/script-example.jpg)
 
+## 发布到 Docker Hub
+
+将构建好的镜像发布到 Docker Hub，方便直接拉取部署：
+
+```bash
+# 1. 在 hub.docker.com 注册账号并创建仓库 doubao-nomark
+
+# 2. 本地登录
+docker login
+
+# 3. 给镜像打标签并推送（替换 你的用户名 为你的 Docker ID）
+docker tag doubao-nomark-fork 你的用户名/doubao-nomark:latest
+docker push 你的用户名/doubao-nomark:latest
+
+# 4. 之后部署只需
+docker pull 你的用户名/doubao-nomark
+docker run -d -p 8000:8000 --name doubao-app 你的用户名/doubao-nomark
+```
+
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=ihmily/doubao-nomark&type=date&legend=top-left)](https://www.star-history.com/#ihmily/doubao-nomark&type=date&legend=top-left)
+[![Star History Chart](https://api.star-history.com/svg?repos=zhiyungezhu/doubao-nomark&type=date&legend=top-left)](https://www.star-history.com/#zhiyungezhu/doubao-nomark&type=date&legend=top-left)
 
 ## 许可证
 
