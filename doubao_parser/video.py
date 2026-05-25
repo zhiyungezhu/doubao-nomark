@@ -1,3 +1,4 @@
+import json
 import re
 import urllib.parse
 from typing import Optional
@@ -6,120 +7,139 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 
 
-def get_query_params(url: str, param_name: Optional[str] = None) -> dict | list[str]:
-    parsed_url = urlparse(url)
-    query_params = parse_qs(parsed_url.query)
+SHARE_API = "https://www.doubao.com/samantha/thread/share/snapshot/get"
+MEDIA_API = "https://www.doubao.com/samantha/media/get_play_info"
 
-    if param_name is None:
-        return query_params
-    else:
-        values = query_params.get(param_name, [])
-        return values
+HEADERS = {
+    "Content-Type": "application/json",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
+}
+
+MEDIA_PARAMS = {
+    "version_code": "20800",
+    "language": "zh-CN",
+    "device_platform": "web",
+    "aid": "497858",
+    "real_aid": "497858",
+    "pkg_type": "release_version",
+    "device_id": "",
+    "pc_version": "2.51.7",
+    "region": "",
+    "sys_region": "",
+    "samantha_web": "1",
+    "use-olympus-account": "1",
+    "web_tab_id": "",
+}
+
+DEFINITION_ORDER = ["8k", "4k", "2160p", "1080p", "720p", "540p", "480p", "360p", "auto"]
 
 
-async def get_doubao_vid(url: str) -> list:
-    headers = {
-        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,"
-        "application/signed-exchange;v=b3;q=0.7",
-        "accept-language": "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7,en-GB;q=0.6",
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/148.0.0.0 Safari/537.36 Edg/148.0.0.0",
-    }
-    async with httpx.AsyncClient() as client:
-        response = await client.get(url, headers=headers)
-        html_str = response.text
-        vids = re.findall("{\\\\&quot;vid\\\\&quot;:\\\\&quot;(.*?)\\\\&quot", html_str)
-        return list(set(vids))
+def _best_quality(items: list) -> dict:
+    best = items[0]
+    best_meta = best.get("meta", {})
+    best_def = best_meta.get("definition", "auto")
+    best_score = DEFINITION_ORDER.index(best_def) if best_def in DEFINITION_ORDER else -1
+    best_area = int(best_meta.get("width", 0)) * int(best_meta.get("height", 0))
+
+    for item in items[1:]:
+        meta = item.get("meta", {})
+        defn = meta.get("definition", "auto")
+        score = DEFINITION_ORDER.index(defn) if defn in DEFINITION_ORDER else -1
+        area = int(meta.get("width", 0)) * int(meta.get("height", 0))
+        if score < best_score or (score == best_score and area > best_area):
+            best = item
+            best_score = score
+            best_area = area
+    return best
 
 
-async def doubao_video_parse(url: str, return_raw: bool = False) -> list:
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/126.0.0.0 Safari/537.36 NetType/WIFI MicroMessenger/7.0.20.1781(0x6700143B) "
-        "WindowsWechat(0x63090c33) XWEB/14315 Flue",
-        "origin": "https://www.doubao.com",
-    }
+async def doubao_video_parse(url: str, return_raw: bool = False):
+    match = re.search(r"doubao\.com/thread/([a-zA-Z0-9]+)", url)
+    if not match:
+        raise ValueError("链接格式不正确，请使用豆包对话链接（包含 /thread/）")
 
-    params = {
-        "version_code": "20800",
-        "language": "zh-CN",
-        "device_platform": "web",
-        "aid": "497858",
-        "real_aid": "497858",
-        "pkg_type": "release_version",
-        "device_id": "",
-        "pc_version": "2.51.7",
-        "region": "",
-        "sys_region": "",
-        "samantha_web": "1",
-        "use-olympus-account": "1",
-        "web_tab_id": "",
-    }
+    share_id = match.group(1)
 
     try:
-        if "/thread/" in url:
-            vid_list = await get_doubao_vid(url)
-        elif "video_id=" in url:
-            vid_list = get_query_params(url, "video_id")
-        else:
-            raise ValueError("链接中缺少 video_id 参数，请检查链接是否正确")
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                SHARE_API, json={"share_id": share_id, "need_bot": False}, headers=HEADERS
+            )
+            result = response.json()
+    except httpx.RequestError as e:
+        raise ValueError(f"网络请求失败，请检查网络连接: {str(e)}")
 
-    except (IndexError, TypeError) as e:
-        print(f"Exception: {e}")
-        raise ValueError("链接格式不正确，请确保使用豆包视频分享链接")
+    if result.get("code") != 0:
+        raise KeyError("API返回异常，请确认链接是否有效")
+
+    data = result.get("data", {})
+
+    vids = []
+    message_list = data.get("message_snapshot", {}).get("message_list", [])
+    for message in message_list:
+        for block in message.get("content_block", []):
+            if block.get("block_type") != 2074:
+                continue
+            content_str = block.get("content", "")
+            if not isinstance(content_str, str):
+                continue
+            try:
+                parsed = json.loads(content_str)
+            except json.JSONDecodeError:
+                continue
+            for creation in parsed.get("creations", []):
+                video_data = creation.get("video")
+                if video_data and video_data.get("vid"):
+                    vids.append(video_data["vid"])
+
+    if not vids:
+        raise KeyError("未找到视频信息，请确认链接中是否包含视频")
 
     video_list = []
-    for vid in vid_list:
+    for vid in vids:
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.post(
-                    "https://www.doubao.com/samantha/media/get_play_info",
-                    params=params,
-                    headers=headers,
+                    MEDIA_API,
+                    params=MEDIA_PARAMS,
+                    headers={**HEADERS, "origin": "https://www.doubao.com"},
                     json={"key": vid},
                 )
-
-                result = response.json()
-
-                if "data" not in result:
-                    raise KeyError("API返回数据格式异常，可能链接已失效")
-
-                if return_raw:
-                    return result
-
-                meta = result["data"]["original_media_info"]["meta"]
-
-                video_list.append(
-                    {
-                        "width": meta["width"],
-                        "height": meta["height"],
-                        "definition": meta["definition"],
-                        "duration": meta["duration"],
-                        "codec_type": meta["codec_type"],
-                        "poster_url": result["data"]["poster_url"],
-                        "url": result["data"]["original_media_info"]["main_url"],
-                    }
-                )
+                media_result = response.json()
         except httpx.RequestError as e:
             raise ValueError(f"网络请求失败，请检查网络连接: {str(e)}")
-        except KeyError as e:
-            raise KeyError(f"视频解析失败: {str(e)}")
+
+        if media_result.get("code") != 0:
+            raise KeyError("视频解析失败，请检查链接是否有效")
+
+        if return_raw:
+            return media_result
+
+        media_data = media_result.get("data", {})
+        media_info = media_data.get("media_info", [])
+
+        if not media_info:
+            raise KeyError("未获取到视频播放地址")
+
+        best = _best_quality(media_info)
+        meta = best.get("meta", {})
+
+        video_list.append(
+            {
+                "url": best.get("main_url", ""),
+                "width": int(meta.get("width", 0)),
+                "height": int(meta.get("height", 0)),
+                "definition": meta.get("definition", "auto"),
+                "duration": meta.get("duration", 0),
+                "poster_url": media_data.get("poster_url", ""),
+                "vid": vid,
+            }
+        )
+
     return video_list
 
 
-async def get_redirect_url(url: str) -> str:
-    headers = {
-        "content-type": "application/json",
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/145.0.0.0 Safari/537.36",
-    }
-    async with httpx.AsyncClient() as client:
-        response = await client.get(url, headers=headers, follow_redirects=True)
-        return str(response.url)
-
-
-async def yunque_video_parse(url: str, return_raw: bool = False) -> list:
-
+async def yunque_video_parse(url: str, return_raw: bool = False):
     headers = {
         "content-type": "application/json",
         "origin": "https://xiaoyunque.jianying.com",
@@ -127,58 +147,49 @@ async def yunque_video_parse(url: str, return_raw: bool = False) -> list:
         "Chrome/145.0.0.0 Safari/537.36",
     }
 
-    redirect_url = await get_redirect_url(url)
-    query = urllib.parse.urlparse(redirect_url).query
-    params_dict = urllib.parse.parse_qs(str(query))
-    share_id = params_dict["share_id"][0]
-    share_sec_did = params_dict["share_sec_did"][0]
-    share_sec_uid = params_dict["share_sec_uid"][0]
-
-    json_data = {
-        "query_params": {
-            "content_type": "video",
-            "home_input_type": "VIDEO_PART",
-            "scene": "agent_tool",
-            "share_campaign_key": "pippit_invite_fission",
-            "share_id": share_id,
-            "share_sec_did": share_sec_did,
-            "share_sec_uid": share_sec_uid,
-        },
-    }
-
     async with httpx.AsyncClient() as client:
+        resp = await client.get(url, headers=headers, follow_redirects=True)
+        query = urllib.parse.urlparse(str(resp.url)).query
+        params = urllib.parse.parse_qs(query)
+
+        json_data = {
+            "query_params": {
+                "content_type": "video",
+                "home_input_type": "VIDEO_PART",
+                "scene": "agent_tool",
+                "share_campaign_key": "pippit_invite_fission",
+                "share_id": params["share_id"][0],
+                "share_sec_did": params["share_sec_did"][0],
+                "share_sec_uid": params["share_sec_uid"][0],
+            },
+        }
+
         response = await client.post(
             "https://xiaoyunque.jianying.com/luckycat/cn/jianying/campaign/v1/pippit/share/landing_page",
             headers=headers,
             json=json_data,
         )
         result = response.json()
-        if "data" not in result:
-            raise KeyError("API返回数据格式异常，可能链接已失效")
 
-        if "page_info" not in result["data"]:
-            raise KeyError("无法获取视频播放信息，请检查链接是否有效")
+    if "data" not in result or "page_info" not in result["data"]:
+        raise KeyError("无法获取视频播放信息，请检查链接是否有效")
 
-        if return_raw:
-            return result
+    if return_raw:
+        return result
 
-        play_info = result["data"]["page_info"]
-        video_info_list = play_info["generate_page"]["item_info"]["video_info"]
-        video_info = video_info_list[0]
-        return [
-            {
-                "url": video_info["video_url"],
-                "width": video_info["width"],
-                "height": video_info["height"],
-                "definition": f"{video_info['width']}p",
-                "poster_url": video_info["cover_url"],
-            }
-        ]
+    video_info = result["data"]["page_info"]["generate_page"]["item_info"]["video_info"][0]
+    return [
+        {
+            "url": video_info["video_url"],
+            "width": video_info["width"],
+            "height": video_info["height"],
+            "definition": f"{video_info['width']}p",
+            "poster_url": video_info["cover_url"],
+        }
+    ]
 
 
 if __name__ == "__main__":
     import asyncio
 
-    # _url = "https://www.doubao.com/video-sharing?share_id=35083351704233730&video_id=v0269cg10004d5e6oefog65smlkr0jl0"
-    _url = "https://www.doubao.com/thread/w3de509c584a4e3da"
-    print(asyncio.run(doubao_video_parse(_url)))
+    print(asyncio.run(doubao_video_parse("https://www.doubao.com/thread/wf24eae5cccb73141")))

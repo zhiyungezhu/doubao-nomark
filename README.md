@@ -14,6 +14,7 @@
 
 ## 更新日志
 
+- **v1.0.6**：适配豆包页面 CSR 改版，重写图片/视频解析逻辑（直接调用新 API），视频自动选取最高清晰度
 - **v1.0.5**：修复豆包无水印视频提取、浏览器插件新增支持视频无水印提取
 - **v1.0.4**：API和插件新增支持千问（Qianwen.com）聊天页图片提取功能
 
@@ -190,15 +191,21 @@ video_data = await doubao_video_parse(
 ```json
 {
   "success": true,
-  "video": {
-    "url": "https://...",
-    "width": 1920,
-    "height": 1080,
-    "definition": "1080p",
-    "poster_url": "https://..."
-  }
+  "video_count": 1,
+  "videos": [
+    {
+      "url": "https://...",
+      "width": 1920,
+      "height": 1080,
+      "definition": "1080p",
+      "duration": 10.08,
+      "poster_url": "https://..."
+    }
+  ]
 }
 ```
+
+> 视频地址为无水印原始版本，自动选取 `media_info` 列表中最高清晰度。
 
 ## 浏览器扩展
 
