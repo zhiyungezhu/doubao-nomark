@@ -1,11 +1,8 @@
 import json
 import re
 import urllib.parse
-from typing import Optional
-from urllib.parse import parse_qs, urlparse
 
 import httpx
-
 
 SHARE_API = "https://www.doubao.com/samantha/thread/share/snapshot/get"
 MEDIA_API = "https://www.doubao.com/samantha/media/get_play_info"
@@ -32,6 +29,15 @@ MEDIA_PARAMS = {
 }
 
 DEFINITION_ORDER = ["8k", "4k", "2160p", "1080p", "720p", "540p", "480p", "360p", "auto"]
+
+
+QIANWEN_API = "https://chat2-api.qianwen.com/api/v1/share/info"
+
+QIANWEN_HEADERS = {
+    "origin": "https://www.qianwen.com",
+    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/146.0.0.0 Safari/537.36 Edg/146.0.0.0",
+}
 
 
 def _best_quality(items: list) -> dict:
@@ -140,15 +146,15 @@ async def doubao_video_parse(url: str, return_raw: bool = False):
 
 
 async def yunque_video_parse(url: str, return_raw: bool = False):
-    headers = {
-        "content-type": "application/json",
+    base_headers = {
         "origin": "https://xiaoyunque.jianying.com",
         "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/145.0.0.0 Safari/537.36",
     }
+    post_headers = {**base_headers, "content-type": "application/json"}
 
     async with httpx.AsyncClient() as client:
-        resp = await client.get(url, headers=headers, follow_redirects=True)
+        resp = await client.get(url, headers=base_headers, follow_redirects=True)
         query = urllib.parse.urlparse(str(resp.url)).query
         params = urllib.parse.parse_qs(query)
 
@@ -166,7 +172,7 @@ async def yunque_video_parse(url: str, return_raw: bool = False):
 
         response = await client.post(
             "https://xiaoyunque.jianying.com/luckycat/cn/jianying/campaign/v1/pippit/share/landing_page",
-            headers=headers,
+            headers=post_headers,
             json=json_data,
         )
         result = response.json()
@@ -187,6 +193,76 @@ async def yunque_video_parse(url: str, return_raw: bool = False):
             "poster_url": video_info["cover_url"],
         }
     ]
+
+
+async def qianwen_video_parse(url: str, return_raw: bool = False):
+    if "qianwen.com/share/chat/" not in url:
+        raise ValueError("链接格式不正确，请使用千问对话链接（包含 qianwen.com/share/chat/）")
+
+    try:
+        share_id = url.split("?")[0].rsplit("chat/", maxsplit=1)[-1]
+        json_data = {
+            "share_id": share_id,
+            "biz_id": "ai_qwen",
+        }
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(QIANWEN_API, json=json_data, headers=QIANWEN_HEADERS)
+            result = response.json()
+            if return_raw:
+                return result
+    except httpx.RequestError as e:
+        raise ValueError(f"网络请求失败，请检查网络连接: {str(e)}")
+
+    try:
+        video_list = []
+        record_list = result["data"]["session"]["record_list"]
+        for record in record_list:
+            response_messages = record["response_messages"]
+            for message in response_messages:
+                if message["mime_type"] == "multi_load/iframe" and message["status"] == "complete":
+                    multi_load = message["meta_data"]["multi_load"]
+                    for item in multi_load:
+                        content = item.get("content", {})
+                        display_list = content.get("display_list")
+                        if not display_list:
+                            continue
+                        duration = content.get("duration", 0)
+                        for display in display_list:
+                            if display.get("type") != "generate_video":
+                                continue
+                            video = display.get("video")
+                            download_video = display.get("download_video")
+                            cover = display.get("cover", [])
+
+                            if video and isinstance(video, list) and len(video) > 0:
+                                video_info = video[0]
+                            elif download_video and isinstance(download_video, list) and len(download_video) > 0:
+                                video_info = download_video[0]
+                            else:
+                                continue
+
+                            cover_item = cover[0] if cover and isinstance(cover, list) else {}
+                            video_list.append(
+                                {
+                                    "url": video_info.get("url", ""),
+                                    "width": int(cover_item.get("width", 0)),
+                                    "height": int(cover_item.get("height", 0)),
+                                    "definition": f"{cover_item.get('width', 0)}p",
+                                    "poster_url": cover_item.get("url", ""),
+                                    "duration": duration,
+                                }
+                            )
+    except KeyError as e:
+        print(f"Exception: {e}")
+        raise KeyError("页面结构发生变化，无法解析视频数据")
+    except json.JSONDecodeError:
+        raise ValueError("页面数据格式错误，无法解析")
+
+    if not video_list:
+        raise KeyError("未找到视频信息，请确认链接中是否包含视频")
+
+    return video_list
 
 
 if __name__ == "__main__":

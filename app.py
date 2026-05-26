@@ -8,9 +8,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, HttpUrl
 
 from doubao_parser.image import doubao_image_parse, qianwen_image_parse
-from doubao_parser.video import doubao_video_parse, yunque_video_parse
+from doubao_parser.video import doubao_video_parse, yunque_video_parse, qianwen_video_parse
 
-app = FastAPI(title="无印豆包 API", description="从豆包|千问对话链接中提取图片和视频资源", version="1.0.4")
+app = FastAPI(title="无印豆包 API", description="从豆包|千问对话链接中提取图片和视频资源", version="1.0.7")
 
 if os.path.exists("icons"):
     app.mount("/icons", StaticFiles(directory="icons"), name="icons")
@@ -109,12 +109,14 @@ async def parse_doubao_get(url: str, return_raw: bool = False):
         raise HTTPException(status_code=500, detail="图片解析失败，请检查链接是否正确")
 
 
-@app.post("/parse-video", summary="解析豆包|云雀视频")
+@app.post("/parse-video", summary="解析豆包|千问|云雀视频")
 async def parse_video(request: VideoRequest):
     try:
         url_str = str(request.url)
         if "doubao.com" in url_str:
             video_data = await doubao_video_parse(url_str, return_raw=request.return_raw)
+        elif "qianwen.com" in url_str:
+            video_data = await qianwen_video_parse(url_str, return_raw=request.return_raw)
         else:
             video_data = await yunque_video_parse(str(request.url), return_raw=request.return_raw)
 
@@ -131,11 +133,13 @@ async def parse_video(request: VideoRequest):
         raise HTTPException(status_code=500, detail="视频解析失败，请检查链接是否正确")
 
 
-@app.get("/parse-video", summary="解析豆包|云雀视频(GET)")
+@app.get("/parse-video", summary="解析豆包|千问|云雀视频(GET)")
 async def parse_video_get(url: str, return_raw: bool = False):
     try:
         if "doubao.com" in url:
             video_data = await doubao_video_parse(url, return_raw=return_raw)
+        elif "qianwen.com" in url:
+            video_data = await qianwen_video_parse(url, return_raw=return_raw)
         else:
             video_data = await yunque_video_parse(url, return_raw=return_raw)
         if return_raw:

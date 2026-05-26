@@ -3,7 +3,6 @@ import re
 
 import httpx
 
-
 API_URL = "https://www.doubao.com/samantha/thread/share/snapshot/get"
 
 HEADERS = {
