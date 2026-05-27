@@ -122,25 +122,40 @@ async def doubao_video_parse(url: str, return_raw: bool = False):
             return media_result
 
         media_data = media_result.get("data", {})
-        media_info = media_data.get("media_info", [])
 
-        if not media_info:
-            raise KeyError("未获取到视频播放地址")
+        original = media_data.get("original_media_info")
+        if original and isinstance(original, dict) and original.get("main_url"):
+            meta = original.get("meta", {})
+            video_list.append(
+                {
+                    "url": original["main_url"],
+                    "width": int(meta.get("width", 0)),
+                    "height": int(meta.get("height", 0)),
+                    "definition": meta.get("definition", "auto"),
+                    "duration": meta.get("duration", 0),
+                    "poster_url": media_data.get("poster_url", ""),
+                    "vid": vid,
+                }
+            )
+        else:
+            media_info = media_data.get("media_info", [])
+            if not media_info:
+                raise KeyError("未获取到视频播放地址")
 
-        best = _best_quality(media_info)
-        meta = best.get("meta", {})
+            best = _best_quality(media_info)
+            meta = best.get("meta", {})
 
-        video_list.append(
-            {
-                "url": best.get("main_url", ""),
-                "width": int(meta.get("width", 0)),
-                "height": int(meta.get("height", 0)),
-                "definition": meta.get("definition", "auto"),
-                "duration": meta.get("duration", 0),
-                "poster_url": media_data.get("poster_url", ""),
-                "vid": vid,
-            }
-        )
+            video_list.append(
+                {
+                    "url": best.get("main_url", ""),
+                    "width": int(meta.get("width", 0)),
+                    "height": int(meta.get("height", 0)),
+                    "definition": meta.get("definition", "auto"),
+                    "duration": meta.get("duration", 0),
+                    "poster_url": media_data.get("poster_url", ""),
+                    "vid": vid,
+                }
+            )
 
     return video_list
 
