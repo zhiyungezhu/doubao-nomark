@@ -222,12 +222,14 @@ video_data = await doubao_video_parse(
 
 **使用说明：**
 
-- 在豆包聊天界面会在页面右下角显示📷按钮，点击按钮可以打开素材下载面板
+- 在豆包聊天界面会在页面右下角显示📷按钮或者顶部栏显示📥︎按钮，点击按钮可以打开素材下载面板
 - 在豆包对话页面会自动识别并提取无水印的图片和视频资源
 
 ### 插件演示
 
 ![script-example](docs/images/script-example.jpg)
+
+![script-example2](docs/images/script-example2.png)
 
 ## 发布到 Docker Hub
 

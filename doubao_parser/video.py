@@ -4,13 +4,7 @@ import urllib.parse
 
 import httpx
 
-SHARE_API = "https://www.doubao.com/samantha/thread/share/snapshot/get"
 MEDIA_API = "https://www.doubao.com/samantha/media/get_play_info"
-
-HEADERS = {
-    "Content-Type": "application/json",
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
-}
 
 MEDIA_PARAMS = {
     "version_code": "20800",
@@ -59,56 +53,45 @@ def _best_quality(items: list) -> dict:
     return best
 
 
+async def get_doubao_vid(url: str) -> list:
+    headers = {
+        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,"
+        "application/signed-exchange;v=b3;q=0.7",
+        "accept-language": "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7,en-GB;q=0.6",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/148.0.0.0 Safari/537.36 Edg/148.0.0.0",
+    }
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url, headers=headers)
+        html_str = response.text
+        vids = re.findall(r'{\\&quot;vid\\&quot;:\\&quot;(.*?)\\&quot', html_str)
+        return list(set(vids))
+
+
 async def doubao_video_parse(url: str, return_raw: bool = False):
-    match = re.search(r"doubao\.com/thread/([a-zA-Z0-9]+)", url)
-    if not match:
+    if "doubao.com/thread/" not in url:
         raise ValueError("链接格式不正确，请使用豆包对话链接（包含 /thread/）")
 
-    share_id = match.group(1)
-
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                SHARE_API, json={"share_id": share_id, "need_bot": False}, headers=HEADERS
-            )
-            result = response.json()
+        vid_list = await get_doubao_vid(url)
     except httpx.RequestError as e:
         raise ValueError(f"网络请求失败，请检查网络连接: {str(e)}")
 
-    if result.get("code") != 0:
-        raise KeyError("API返回异常，请确认链接是否有效")
-
-    data = result.get("data", {})
-
-    vids = []
-    message_list = data.get("message_snapshot", {}).get("message_list", [])
-    for message in message_list:
-        for block in message.get("content_block", []):
-            if block.get("block_type") != 2074:
-                continue
-            content_str = block.get("content", "")
-            if not isinstance(content_str, str):
-                continue
-            try:
-                parsed = json.loads(content_str)
-            except json.JSONDecodeError:
-                continue
-            for creation in parsed.get("creations", []):
-                video_data = creation.get("video")
-                if video_data and video_data.get("vid"):
-                    vids.append(video_data["vid"])
-
-    if not vids:
+    if not vid_list:
         raise KeyError("未找到视频信息，请确认链接中是否包含视频")
 
     video_list = []
-    for vid in vids:
+    for vid in vid_list:
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.post(
                     MEDIA_API,
                     params=MEDIA_PARAMS,
-                    headers={**HEADERS, "origin": "https://www.doubao.com"},
+                    headers={
+                        "Content-Type": "application/json",
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
+                        "origin": "https://www.doubao.com",
+                    },
                     json={"key": vid},
                 )
                 media_result = response.json()
