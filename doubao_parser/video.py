@@ -221,6 +221,24 @@ async def qianwen_video_parse(url: str, return_raw: bool = False):
                 if message["mime_type"] == "multi_load/iframe" and message["status"] == "complete":
                     multi_load = message["meta_data"]["multi_load"]
                     for item in multi_load:
+                        # 新格式: HTML 内嵌 <video> 标签
+                        html = item.get("html", {})
+                        sc_html = html.get("sc_html", "")
+                        if sc_html:
+                            src_match = re.search(r'src="(https?://[^"]+\.mp4[^"]*)"', sc_html)
+                            poster_match = re.search(r'poster="(https?://[^"]+)"', sc_html)
+                            if src_match:
+                                video_list.append({
+                                    "url": src_match.group(1),
+                                    "width": 0,
+                                    "height": 0,
+                                    "definition": "auto",
+                                    "poster_url": poster_match.group(1) if poster_match else "",
+                                    "duration": 0,
+                                })
+                                continue
+
+                        # 旧格式: structured content.display_list
                         content = item.get("content", {})
                         display_list = content.get("display_list")
                         if not display_list:
@@ -241,16 +259,14 @@ async def qianwen_video_parse(url: str, return_raw: bool = False):
                                 continue
 
                             cover_item = cover[0] if cover and isinstance(cover, list) else {}
-                            video_list.append(
-                                {
-                                    "url": video_info.get("url", ""),
-                                    "width": int(cover_item.get("width", 0)),
-                                    "height": int(cover_item.get("height", 0)),
-                                    "definition": f"{cover_item.get('width', 0)}p",
-                                    "poster_url": cover_item.get("url", ""),
-                                    "duration": duration,
-                                }
-                            )
+                            video_list.append({
+                                "url": video_info.get("url", ""),
+                                "width": int(cover_item.get("width", 0)),
+                                "height": int(cover_item.get("height", 0)),
+                                "definition": f"{cover_item.get('width', 0)}p",
+                                "poster_url": cover_item.get("url", ""),
+                                "duration": duration,
+                            })
     except KeyError as e:
         print(f"Exception: {e}")
         raise KeyError("页面结构发生变化，无法解析视频数据")
