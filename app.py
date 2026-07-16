@@ -7,10 +7,21 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, HttpUrl
 
+from contextlib import asynccontextmanager
+
+from doubao_parser.browser import close_browser
 from doubao_parser.image import doubao_image_parse, qianwen_image_parse
 from doubao_parser.video import doubao_video_parse, yunque_video_parse, qianwen_video_parse
 
-app = FastAPI(title="无印豆包 API", description="从豆包|千问对话链接中提取图片和视频资源", version="1.0.8")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield
+    # Cleanup browser on shutdown
+    await close_browser()
+
+
+app = FastAPI(title="无印豆包 API", description="从豆包|千问对话链接中提取图片和视频资源", version="1.0.9", lifespan=lifespan)
 
 if os.path.exists("icons"):
     app.mount("/icons", StaticFiles(directory="icons"), name="icons")

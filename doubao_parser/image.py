@@ -1,7 +1,159 @@
 import json
+import logging
 import re
 
 import httpx
+
+from .browser import fetch_page_html
+
+logger = logging.getLogger(__name__)
+
+
+def _extract_images_from_messages(messages):
+    """Extract images from message list, supporting both old (creation_block)
+    and new (attachment_block) formats."""
+    images = []
+    for message in messages:
+        # New format: content_block (old) or content (new, contains JSON array)
+        blocks = message.get("content_block") or []
+
+        # Also try direct `content` field (newer format)
+        if not blocks and message.get("content"):
+            try:
+                content_arr = json.loads(message["content"])
+                if isinstance(content_arr, list):
+                    blocks = content_arr
+            except (json.JSONDecodeError, TypeError):
+                blocks = []
+
+        for block in blocks:
+            if isinstance(block, str):
+                try:
+                    block = json.loads(block)
+                except json.JSONDecodeError:
+                    continue
+            if not isinstance(block, dict):
+                continue
+
+            content = block.get("content", block)
+
+            # New format: attachment_block
+            attachments = content.get("attachment_block", {}).get("attachments")
+            if attachments:
+                for att in attachments:
+                    img = att.get("image")
+                    if not img:
+                        continue
+                    # Prefer image_ori (original quality), fallback to thumb/preview
+                    ori = img.get("image_ori") or img.get("image_thumb") or img.get("image_preview")
+                    if ori and ori.get("url"):
+                        ori["url"] = ori["url"].replace("&amp;", "&")
+                        # Add name if available
+                        ori["name"] = img.get("name", "")
+                        images.append(ori)
+                continue
+
+            # Old format: creation_block
+            creations = content.get("creation_block", {}).get("creations")
+            if not creations:
+                # Try content_v2 or content directly
+                content_v2 = block.get("content_v2") or block.get("content")
+                if content_v2 and isinstance(content_v2, str):
+                    try:
+                        parsed = json.loads(content_v2)
+                        creations = parsed.get("creation_block", {}).get("creations")
+                    except json.JSONDecodeError:
+                        pass
+
+            if creations:
+                for img_data in creations:
+                    img = img_data.get("image")
+                    if not img:
+                        continue
+                    raw = img.get("image_ori_raw")
+                    if raw and raw.get("url"):
+                        raw["url"] = raw["url"].replace("&amp;", "&")
+                        images.append(raw)
+
+    return images
+
+
+def _parse_html_for_images(html_str: str, return_raw: bool = False) -> list | dict | None:
+    """Try all methods to extract image data from HTML.
+    Returns image list, raw data dict, or None if all methods fail."""
+    # Method 1: Try modern-run-window-fn format (current)
+    match = re.search(
+        r'data-script-src="modern-run-window-fn".*?data-fn-args="([^"]+)"',
+        html_str,
+        re.DOTALL,
+    )
+    if match:
+        try:
+            raw = match.group(1).replace("&quot;", '"')
+            parsed = json.loads(raw)
+            route_data = parsed[1]
+            fn_args = route_data[0].get("routerDataFnArgs", [])
+            if fn_args:
+                actual_data = json.loads(fn_args[0])
+                if return_raw:
+                    return actual_data
+                messages = actual_data.get("data", {}).get("message_snapshot", {}).get("message_list", [])
+                return _extract_images_from_messages(messages)
+        except (json.JSONDecodeError, (KeyError, IndexError, TypeError)):
+            pass
+
+    # Method 2: Try _ROUTER_DATA format (alternative inline data)
+    match = re.search(r"_ROUTER_DATA\s*=\s*(\{.+?\});", html_str, re.DOTALL)
+    if match:
+        try:
+            router_data = json.loads(match.group(1))
+            loader_data = router_data.get("loaderData", {})
+            layout = loader_data.get("thread_layout", {})
+            if layout.get("data", {}).get("message_snapshot"):
+                messages = layout["data"]["message_snapshot"]["message_list"]
+                return _extract_images_from_messages(messages)
+        except (json.JSONDecodeError, (KeyError, IndexError, TypeError)):
+            pass
+
+    # Method 3: Try modern-run-router-data-fn format (older)
+    match = re.search(
+        r'data-script-src="modern-run-router-data-fn".*?data-fn-args="([^"]+)"',
+        html_str,
+        re.DOTALL,
+    )
+    if match:
+        try:
+            raw = match.group(1).replace("&quot;", '"')
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict) and parsed.get("data"):
+                messages = parsed["data"]["message_snapshot"]["message_list"]
+                return _extract_images_from_messages(messages)
+            elif isinstance(parsed, list):
+                for item in parsed:
+                    if isinstance(item, dict) and item.get("data"):
+                        messages = item["data"]["message_snapshot"]["message_list"]
+                        return _extract_images_from_messages(messages)
+        except (json.JSONDecodeError, (KeyError, IndexError, TypeError)):
+            pass
+
+    # Method 4: Try modern-inline format with _ROUTER_DATA
+    match = re.search(
+        r'data-script-src="modern-inline".*?_ROUTER_DATA\s*=\s*(\{.+?\});',
+        html_str,
+        re.DOTALL,
+    )
+    if match:
+        try:
+            router_data = json.loads(match.group(1))
+            loader_data = router_data.get("loaderData", {})
+            layout = loader_data.get("thread_layout", {})
+            if layout.get("data", {}).get("message_snapshot"):
+                messages = layout["data"]["message_snapshot"]["message_list"]
+                return _extract_images_from_messages(messages)
+        except (json.JSONDecodeError, (KeyError, IndexError, TypeError)):
+            pass
+
+    return None
 
 
 async def doubao_image_parse(url: str, return_raw: bool = False):
@@ -14,6 +166,9 @@ async def doubao_image_parse(url: str, return_raw: bool = False):
         "Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0",
     }
 
+    html_str = None
+
+    # Method A: Try direct HTTP fetch first (works for SSR pages)
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(url, headers=headers)
@@ -21,77 +176,19 @@ async def doubao_image_parse(url: str, return_raw: bool = False):
     except httpx.RequestError as e:
         raise ValueError(f"网络请求失败，请检查网络连接: {str(e)}")
 
-    match_json_str = None
-    match_pattern = [
-        'data-script-src="modern-run-router-data-fn" data-fn-args="(.*?)" nonce="',
-        'data-script-src="modern-run-window-fn" data-fn-name="mergeLoaderData" data-fn-args="(.*?)" nonce="',
-    ]
-    for pattern in match_pattern:
-        match_json_str = re.search(pattern, html_str, re.DOTALL)
-        if match_json_str:
-            break
+    result = _parse_html_for_images(html_str, return_raw)
+    if result is not None:
+        return result
 
-    if not match_json_str:
-        raise KeyError("无法解析页面数据，请确认链接是否有效")
+    # Method B: Try Playwright (handles CSR pages by executing JS)
+    logger.info("Direct fetch returned no data, trying Playwright for CSR page...")
+    pw_html = await fetch_page_html(url)
+    if pw_html:
+        result = _parse_html_for_images(pw_html, return_raw)
+        if result is not None:
+            return result
 
-    try:
-        json_str = match_json_str.group(1).replace("&quot;", '"')
-        json_data = json.loads(json_str)
-        if return_raw:
-            return json_data
-
-        image_list = []
-        for data in json_data:
-            if isinstance(data, dict) and data.get("data"):
-                message_snapshot = data["data"]["message_snapshot"]["message_list"]
-                for message in message_snapshot:
-                    if not message.get("content_block"):
-                        continue
-
-                    for m2 in message["content_block"]:
-                        if m2.get("content_v2"):
-                            json_data2 = json.loads(m2["content_v2"])
-                        else:
-                            json_data2 = json.loads(m2["content"]) if isinstance(m2["content"], str) else m2["content"]
-
-                        if not json_data2.get("creation_block"):
-                            continue
-                        creations = json_data2["creation_block"]["creations"]
-
-                        for image in creations:
-                            if not image.get("image") or not image["image"].get("image_ori_raw"):
-                                continue
-                            image_raw = image["image"]["image_ori_raw"]
-                            image_raw["url"] = image_raw["url"].replace("&amp;", "&")
-                            image_list.append(image_raw)
-
-            elif isinstance(data, list) and data:
-                router_data_fn = json.loads(data[0]["routerDataFnArgs"][0])
-                message_snapshot = router_data_fn["data"]["message_snapshot"]["message_list"]
-                for message in message_snapshot:
-                    if not message.get("content_block"):
-                        continue
-
-                    for m2 in message["content_block"]:
-                        json_data2 = m2.get("content_v2") or m2.get("content")
-                        json_data2 = json.loads(json_data2) if isinstance(json_data2, str) else json_data2
-
-                        if json_data2.get("creation_block"):
-                            creations = json_data2["creation_block"]["creations"]
-                            for image in creations:
-                                if not image.get("image") or not image["image"].get("image_ori_raw"):
-                                    continue
-                                image_raw = image["image"]["image_ori_raw"]
-                                image_raw["url"] = image_raw["url"].replace("&amp;", "&")
-                                image_list.append(image_raw)
-
-    except KeyError as e:
-        print(f"Exception: {e}")
-        raise KeyError("页面结构发生变化，无法解析图片数据")
-    except json.JSONDecodeError:
-        raise ValueError("页面数据格式错误，无法解析")
-
-    return image_list
+    raise KeyError("无法解析页面数据，请确认链接是否有效")
 
 
 async def qianwen_image_parse(url: str, return_raw: bool = False):
@@ -145,6 +242,4 @@ async def qianwen_image_parse(url: str, return_raw: bool = False):
 if __name__ == "__main__":
     import asyncio
 
-    print(asyncio.run(doubao_image_parse("https://www.doubao.com/thread/aef4c7a4c78c2")))
-    # print(asyncio.run(doubao_image_parse("https://www.doubao.com/thread/xba6cbc09655f8f7fbeceb0ee9f8f3f44")))
-    # print(asyncio.run(qianwen_image_parse("https://www.qianwen.com/share/chat/1b7641042a7c4f2fae8111f732c31f7f")))
+    print(asyncio.run(doubao_image_parse("https://www.doubao.com/thread/xfdf0eacab48586a2913c5a0122687146")))

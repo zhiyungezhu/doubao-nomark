@@ -1,8 +1,13 @@
 import json
+import logging
 import re
 import urllib.parse
 
 import httpx
+
+from .browser import fetch_page_html
+
+logger = logging.getLogger(__name__)
 
 MEDIA_API = "https://www.doubao.com/samantha/media/get_play_info"
 
@@ -61,11 +66,29 @@ async def get_doubao_vid(url: str) -> list:
         "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/148.0.0.0 Safari/537.36 Edg/148.0.0.0",
     }
-    async with httpx.AsyncClient() as client:
-        response = await client.get(url, headers=headers)
-        html_str = response.text
+
+    # Method A: Direct HTTP fetch
+    html_str = None
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, headers=headers)
+            html_str = response.text
+    except httpx.RequestError:
+        pass
+
+    if html_str:
         vids = re.findall(r'{\\&quot;vid\\&quot;:\\&quot;(.*?)\\&quot', html_str)
+        if vids:
+            return list(set(vids))
+
+    # Method B: Try Playwright for CSR pages
+    logger.info("Direct fetch found no vids, trying Playwright...")
+    pw_html = await fetch_page_html(url)
+    if pw_html:
+        vids = re.findall(r'{\\&quot;vid\\&quot;:\\&quot;(.*?)\\&quot', pw_html)
         return list(set(vids))
+
+    return []
 
 
 async def doubao_video_parse(url: str, return_raw: bool = False):
